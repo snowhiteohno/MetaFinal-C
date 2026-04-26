@@ -18,7 +18,7 @@ def run_episode_demo(agent_choice: str, seed: int):
         return
 
     try:
-        env = IncidentResponseEnv(max_steps=15)  # 15 steps for demo (saves tokens)
+        env = IncidentResponseEnv(max_steps=20)  # 20 steps: heuristic may use up to 4 check_logs before fix
 
         if agent_choice == "Random":
             agent = RandomAgent()

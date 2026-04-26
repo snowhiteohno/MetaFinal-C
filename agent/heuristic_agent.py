@@ -2,7 +2,7 @@ from env.simulator import SERVICES
 
 
 class HeuristicAgent:
-    """Uses check_logs text to guess service + failure_mode, then applies the matching fix."""
+    """Uses check_logs on alert + high-CPU services, infers mode from log text, applies matching fix."""
 
     def __init__(self):
         self._diagnosed = False
@@ -27,6 +27,25 @@ class HeuristicAgent:
         self._last_check_target = None
 
     @staticmethod
+    def _candidate_services(obs: dict) -> list[str]:
+        """Prefer services called out in alerts (true degradation), then high noisy CPU — root is often missed by CPU-only top-2."""
+        metrics = obs["metrics"]
+        by_cpu = sorted(SERVICES, key=lambda s: metrics[s]["cpu"], reverse=True)
+        alert_svcs: list[str] = []
+        for a in obs.get("recent_alerts", []) or []:
+            if isinstance(a, str) and ":" in a:
+                name = a.split(":", 1)[0].strip()
+                if name in SERVICES and name not in alert_svcs:
+                    alert_svcs.append(name)
+        seen: set[str] = set()
+        out: list[str] = []
+        for s in alert_svcs + by_cpu:
+            if s not in seen:
+                seen.add(s)
+                out.append(s)
+        return out[:4]
+
+    @staticmethod
     def _score_incident_keywords(text: str) -> int:
         """Higher = more likely this service is the real root (template lines vs generic noise)."""
         if not text:
@@ -38,6 +57,8 @@ class HeuristicAgent:
             "config parse",
             "startup probe failing",
             "deploy",
+            "v2.4.1",
+            "v2.3.9",
             "queue depth",
             "throttling",
             "latency spike",
@@ -63,6 +84,8 @@ class HeuristicAgent:
                 "config parse",
                 "startup probe failing",
                 "deploy",
+                "v2.4.1",
+                "v2.3.9",
             )
         ):
             return "bad_deploy"
@@ -72,7 +95,7 @@ class HeuristicAgent:
             return "memory_leak"
         return "crashed"
 
-    def _pick_suspect(self, by_cpu: list[str]) -> str:
+    def _pick_suspect(self, candidates: list[str]) -> str:
         best, best_score = None, -1
         for svc in self._checked:
             sc = self._score_incident_keywords(self._log_by_service.get(svc, ""))
@@ -81,22 +104,25 @@ class HeuristicAgent:
                 best = svc
         if best is not None and best_score > 0:
             return best
-        return by_cpu[0]
+        for svc in candidates:
+            if svc in self._checked:
+                return svc
+        return candidates[0] if candidates else SERVICES[0]
 
     def act(self, obs: dict) -> dict:
         self._capture_previous_logs(obs)
         metrics = obs["metrics"]
 
         if not self._diagnosed:
-            by_cpu = sorted(SERVICES, key=lambda s: metrics[s]["cpu"], reverse=True)
-            for svc in by_cpu[:2]:
+            candidates = self._candidate_services(obs)
+            for svc in candidates:
                 if svc not in self._checked:
                     self._checked.add(svc)
                     self._last_check_target = svc
                     return {"type": "check_logs", "target": svc}
 
             combined = "\n".join(self._log_by_service.values())
-            self._suspected = self._pick_suspect(by_cpu)
+            self._suspected = self._pick_suspect(candidates)
             self._failure_mode_guess = self._infer_failure_mode(combined)
             self._diagnosed = True
             return {
