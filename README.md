@@ -9,36 +9,14 @@
 | Deliverable | Link |
 |-------------|------|
 | HF Space (live demo) | [huggingface.co/spaces/u7k4rs6/Metafinal](https://huggingface.co/spaces/u7k4rs6/Metafinal) |
-| Training Notebook (Colab) | [Colab — train.ipynb](https://colab.research.google.com/drive/16Rq5AQ3yvXiKh_3Chs1fx41YK7isWNJp?usp=sharing) |
-| Blog Post | [GitHub — MetaFinal-C](https://github.com/snowhiteohno/MetaFinal-C) |
-| Trained Model | [_Publish steps below_](#publishing-your-trained-model-on-hugging-face) — then put your model page here (example: `https://huggingface.co/u7k4rs6/incident-response-grpo`) |
+| Training Notebook (Colab) | [Open in Colab](https://colab.research.google.com/drive/16Rq5AQ3yvXiKh_3Chs1fx41YK7isWNJp?usp=sharing) |
+| Blog Post | [github.com/snowhiteohno/MetaFinal-C](https://github.com/snowhiteohno/MetaFinal-C) |
+| Trained Model | **Not on the Hub yet** — run **Step 3** in Colab after training. Target repo id: `u7k4rs6/incident-response-grpo` (`create_repo` in the notebook creates it on first push). Optional: [create empty model repo](https://huggingface.co/new) first with that exact name. |
+| Episode rollouts (Dataset) | **Step 4** in Colab — target: `u7k4rs6/incident-response-rollouts`. Optional: [create empty dataset repo](https://huggingface.co/new-dataset). |
 
-## Publishing your trained model on Hugging Face
+### Hub uploads (after training)
 
-Judges need a **Model** repo (not the Space), even if you only ship a LoRA adapter or a small checkpoint. The demo Space can keep using **Groq** for inference; the HF model repo is where you store **what you trained** (weights + short README).
-
-1. **Create the repo** — [huggingface.co/new](https://huggingface.co/new) → **Model** → owner `u7k4rs6` (or your org) → name e.g. `incident-response-grpo` → **Public** → Create.
-2. **Add a model card** — In the repo web UI, create `README.md` with: base model name (e.g. Qwen2.5-1.5B), training method (GRPO / TRL), link to this GitHub repo, Colab, and Space.
-3. **Upload weights** — From Colab or your machine, after training saves a folder (e.g. `./checkpoints` or PEFT adapter files):
-
-```python
-import os
-from huggingface_hub import HfApi
-
-# HF token: https://huggingface.co/settings/tokens (write access)
-api = HfApi(token=os.environ["HF_TOKEN"])
-
-api.upload_folder(
-    folder_path="./checkpoints",  # or path to your adapter folder
-    repo_id="u7k4rs6/incident-response-grpo",  # must match the repo you created
-    repo_type="model",
-)
-```
-
-4. **Copy the model page URL** — It looks like `https://huggingface.co/u7k4rs6/incident-response-grpo`. Put that URL in the **Links** table (replace the placeholder line or add a second row if you prefer a clean table-only README later).
-5. **If you have no trained weights yet** — Still create the **public** model repo with a README that states the planned base model, reward signal (`IncidentResponseEnv`), and “weights pending” or attach a minimal checkpoint when ready. A public empty repo with a good card is better than linking to `huggingface.co/models`.
-
-`train.ipynb` includes commented `huggingface_hub` upload lines you can uncomment once `HF_TOKEN` and `repo_id` are set.
+In Colab, set a **write** token as `HF_TOKEN` ([token settings](https://huggingface.co/settings/tokens)), then run **Step 3** (model) and **Step 4** (rollouts) at the end of [`train.ipynb`](https://colab.research.google.com/drive/16Rq5AQ3yvXiKh_3Chs1fx41YK7isWNJp?usp=sharing). After Step 3 succeeds, the model will be at `https://huggingface.co/u7k4rs6/incident-response-grpo`; after Step 4, the dataset at `https://huggingface.co/datasets/u7k4rs6/incident-response-rollouts` — you can paste those into the table above once they resolve.
 
 ## Training Curves
 
@@ -81,7 +59,7 @@ The reward gap between a reasoning agent and a brute-force guesser:
 | Agent | Success Rate | Diagnosis Acc. | Mean Reward |
 |-------|-------------|----------------|-------------|
 | Random | 10% | 5% | -8.2 |
-| Heuristic | 26% | 18% | 4.1 |
+| Heuristic (log-aware) | ~68% | ~99% | ~81 |
 | **Trained LLM** | **68%** | **61%** | **22.7** |
 
 ## Setup
@@ -120,4 +98,4 @@ training_curves/      — Committed reward/loss PNGs
 - [ ] `train.ipynb` runnable; Colab link in this README
 - [ ] README links and embedded plots updated for judges
 
-Double-check every link in a **logged-out** browser before submit. Update the **Trained Model** line once your `huggingface.co/...` model repo exists.
+Double-check every link in a **logged-out** browser before submit. Confirm the **model** and **dataset** repos exist after you run the Hub cells in Colab.

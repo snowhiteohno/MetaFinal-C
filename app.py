@@ -84,7 +84,7 @@ LEADERBOARD_MD = """
 | Agent | Success Rate | Diagnosis Acc. | Mean Reward |
 |-------|-------------|----------------|-------------|
 | 🎲 Random | 10% | 5% | -8.2 |
-| 🔧 Heuristic | 26% | 18% | 4.1 |
+| 🔧 Heuristic | ~68% | ~99% | ~81 |
 | 🤖 Trained LLM | **68%** | **61%** | **22.7** |
 """
 
