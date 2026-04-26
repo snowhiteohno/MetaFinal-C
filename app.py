@@ -18,7 +18,7 @@ def run_episode_demo(agent_choice: str, seed: int):
         return
 
     try:
-        env = IncidentResponseEnv(max_steps=25)  # headroom: up to 5 check_logs + diagnose + fix + 2× healthy ticks
+        env = IncidentResponseEnv(max_steps=30)  # headroom: 5× logs + diagnose + fixes + 2× healthy ticks
 
         if agent_choice == "Random":
             agent = RandomAgent()

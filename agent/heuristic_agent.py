@@ -2,7 +2,7 @@ from env.simulator import SERVICES
 
 
 class HeuristicAgent:
-    """Uses check_logs on alert + high-CPU services, infers mode from log text, applies matching fix."""
+    """Log-driven incident triage: alerts + all services, robust capture, mode inference, safe fallbacks."""
 
     def __init__(self):
         self._diagnosed = False
@@ -11,6 +11,8 @@ class HeuristicAgent:
         self._failure_mode_guess = "crashed"
         self._log_by_service: dict[str, str] = {}
         self._last_check_target: str | None = None
+        self._stabilize = False
+        self._bad_restart_count = 0
 
     def reset(self):
         self._diagnosed = False
@@ -19,9 +21,10 @@ class HeuristicAgent:
         self._failure_mode_guess = "crashed"
         self._log_by_service = {}
         self._last_check_target = None
+        self._stabilize = False
+        self._bad_restart_count = 0
 
     def _capture_previous_logs(self, obs: dict) -> None:
-        """Store LOG output for the service we last queried. Be lenient on prefix (Space/Gradio must not drop logs)."""
         raw = obs.get("last_action_result")
         lr = "" if raw is None else (raw if isinstance(raw, str) else str(raw))
         head = lr.lstrip()[:24].upper()
@@ -32,7 +35,6 @@ class HeuristicAgent:
 
     @staticmethod
     def _candidate_services(obs: dict) -> list[str]:
-        """Alerts + CPU order first, then any remaining service (all 5 may be log-scanned)."""
         metrics = obs["metrics"]
         by_cpu = sorted(SERVICES, key=lambda s: metrics[s]["cpu"], reverse=True)
         alert_svcs: list[str] = []
@@ -104,10 +106,12 @@ class HeuristicAgent:
 
     @classmethod
     def _infer_best_failure_mode(cls, log_by_service: dict[str, str]) -> str:
-        """Scan every stored LOG block + aggregate; first match by severity wins (avoids losing api-gateway hints)."""
-        chunks = list(log_by_service.values()) + ["\n".join(log_by_service.values())]
+        """Highest-signal log blocks first, then full blob — avoids noise-only chunks winning."""
+        parts = [t for t in log_by_service.values() if t]
+        parts = sorted(parts, key=lambda t: cls._score_incident_keywords(t), reverse=True)
+        parts.append("\n".join(log_by_service.values()))
         for mode in ("bad_deploy", "overloaded", "memory_leak", "crashed"):
-            for ch in chunks:
+            for ch in parts:
                 if cls._text_suggests_mode(ch, mode):
                     return mode
         return "crashed"
@@ -128,6 +132,18 @@ class HeuristicAgent:
 
     def act(self, obs: dict) -> dict:
         self._capture_previous_logs(obs)
+        lr_prev_raw = obs.get("last_action_result")
+        lr_prev = (
+            ""
+            if lr_prev_raw is None
+            else (lr_prev_raw if isinstance(lr_prev_raw, str) else str(lr_prev_raw))
+        ).lower()
+
+        if "recovering" in lr_prev:
+            self._stabilize = True
+        if self._diagnosed and self._stabilize:
+            return {"type": "no_op"}
+
         metrics = obs["metrics"]
 
         if not self._diagnosed:
@@ -140,7 +156,6 @@ class HeuristicAgent:
 
             self._suspected = self._pick_suspect(candidates)
             self._failure_mode_guess = self._infer_best_failure_mode(self._log_by_service)
-            # If we picked a suspect with a strong local log, prefer mode implied by that log
             svc_log = self._log_by_service.get(self._suspected or "", "")
             for mode in ("bad_deploy", "overloaded", "memory_leak", "crashed"):
                 if self._text_suggests_mode(svc_log, mode):
@@ -155,6 +170,18 @@ class HeuristicAgent:
 
         if not self._suspected:
             return {"type": "no_op"}
+
+        # Misclassified bad_deploy as crashed → restart makes things worse; flip after 2 hits
+        if self._failure_mode_guess == "crashed" and "made things worse" in lr_prev:
+            self._bad_restart_count += 1
+            if self._bad_restart_count >= 2:
+                sus_log = (self._log_by_service.get(self._suspected, "") or "").lower()
+                if any(
+                    k in sus_log
+                    for k in ("config parse", "rollback", "probe failing", "v2.4", "v2.3", "deploy")
+                ):
+                    self._failure_mode_guess = "bad_deploy"
+                self._bad_restart_count = 0
 
         fm = self._failure_mode_guess
         if fm == "bad_deploy":
