@@ -18,7 +18,7 @@ def run_episode_demo(agent_choice: str, seed: int):
         return
 
     try:
-        env = IncidentResponseEnv(max_steps=20)  # 20 steps: heuristic may use up to 4 check_logs before fix
+        env = IncidentResponseEnv(max_steps=25)  # headroom: up to 5 check_logs + diagnose + fix + 2× healthy ticks
 
         if agent_choice == "Random":
             agent = RandomAgent()

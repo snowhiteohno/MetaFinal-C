@@ -28,7 +28,7 @@ class HeuristicAgent:
 
     @staticmethod
     def _candidate_services(obs: dict) -> list[str]:
-        """Prefer services called out in alerts (true degradation), then high noisy CPU — root is often missed by CPU-only top-2."""
+        """Alerts + CPU order first, then append any unchecked service so all 5 can be log-scanned (never truncate at 4 — the 5th can be the root)."""
         metrics = obs["metrics"]
         by_cpu = sorted(SERVICES, key=lambda s: metrics[s]["cpu"], reverse=True)
         alert_svcs: list[str] = []
@@ -43,7 +43,11 @@ class HeuristicAgent:
             if s not in seen:
                 seen.add(s)
                 out.append(s)
-        return out[:4]
+        for s in SERVICES:
+            if s not in seen:
+                seen.add(s)
+                out.append(s)
+        return out
 
     @staticmethod
     def _score_incident_keywords(text: str) -> int:
