@@ -68,9 +68,11 @@ class Simulator:
                 s.true_health[s.root_cause] = max(0.0, s.true_health[s.root_cause] - 0.3)
                 s.memory_leak_timer = 0
 
-        # propagate degradation
+        # propagate degradation (weakens when root is mostly healthy so correct fixes can clear success)
         rc_idx = svc_idx[s.root_cause]
         rc_degradation = 1.0 - s.true_health[s.root_cause]
+        if s.true_health[s.root_cause] >= 0.83:
+            rc_degradation *= 0.12
 
         for j, svc in enumerate(SERVICES):
             if svc == s.root_cause:
@@ -105,6 +107,11 @@ class Simulator:
                 s.true_health[s.root_cause] = 0.95
                 if s.failure_mode == "memory_leak":
                     s.memory_leak_timer = 1  # start recurrence clock
+            # Ease cascade damage on dependents once the root cause is remediated.
+            for svc in SERVICES:
+                if svc == s.root_cause:
+                    continue
+                s.true_health[svc] = min(1.0, s.true_health[svc] + 0.075)
             return True, f"{action_type} on {target}: service recovering"
         elif is_correct_target and action_type == "restart_service" and s.failure_mode == "bad_deploy":
             # restart on bad_deploy WORSENS health

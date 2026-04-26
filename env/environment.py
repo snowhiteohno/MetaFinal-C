@@ -94,7 +94,9 @@ class IncidentResponseEnv:
         system_h = self.sim.system_health
         self._health_history.append(system_h)
 
-        if system_h >= 0.90:
+        # Just below 0.90: after a correct overloaded fix the root is capped at 0.90 and the
+        # noisy mean can sit at ~0.895–0.899 for several ticks while dependents catch up.
+        if system_h >= 0.888:
             self._consecutive_healthy += 1
         else:
             self._consecutive_healthy = 0

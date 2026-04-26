@@ -2,7 +2,7 @@ from env.simulator import SERVICES
 
 
 class HeuristicAgent:
-    """Log-driven incident triage: alerts + all services, robust capture, mode inference, safe fallbacks."""
+    """Log-driven triage: full service scans, robust log capture, mode inference, recovery + fallbacks."""
 
     def __init__(self):
         self._diagnosed = False
@@ -13,6 +13,8 @@ class HeuristicAgent:
         self._last_check_target: str | None = None
         self._stabilize = False
         self._bad_restart_count = 0
+        self._no_effect_restarts = 0
+        self._issued_fix = False
 
     def reset(self):
         self._diagnosed = False
@@ -23,6 +25,8 @@ class HeuristicAgent:
         self._last_check_target = None
         self._stabilize = False
         self._bad_restart_count = 0
+        self._no_effect_restarts = 0
+        self._issued_fix = False
 
     def _capture_previous_logs(self, obs: dict) -> None:
         raw = obs.get("last_action_result")
@@ -106,7 +110,6 @@ class HeuristicAgent:
 
     @classmethod
     def _infer_best_failure_mode(cls, log_by_service: dict[str, str]) -> str:
-        """Highest-signal log blocks first, then full blob — avoids noise-only chunks winning."""
         parts = [t for t in log_by_service.values() if t]
         parts = sorted(parts, key=lambda t: cls._score_incident_keywords(t), reverse=True)
         parts.append("\n".join(log_by_service.values()))
@@ -139,8 +142,20 @@ class HeuristicAgent:
             else (lr_prev_raw if isinstance(lr_prev_raw, str) else str(lr_prev_raw))
         ).lower()
 
-        if "recovering" in lr_prev:
-            self._stabilize = True
+        health = float(obs.get("system_health_score", 0) or 0)
+        recovering_msg = (
+            "service recovering" in lr_prev
+            or ": service recovering" in lr_prev
+        )
+
+        # Do not lock on "recovering" while mean health is still bad (would no_op until timeout).
+        if self._diagnosed:
+            if self._stabilize and health < 0.872:
+                self._stabilize = False
+            if (recovering_msg and health >= 0.893) or (
+                self._issued_fix and health >= 0.905
+            ):
+                self._stabilize = True
         if self._diagnosed and self._stabilize:
             return {"type": "no_op"}
 
@@ -171,7 +186,17 @@ class HeuristicAgent:
         if not self._suspected:
             return {"type": "no_op"}
 
-        # Misclassified bad_deploy as crashed → restart makes things worse; flip after 2 hits
+        if self._failure_mode_guess == "crashed" and "no significant change" in lr_prev:
+            self._no_effect_restarts += 1
+            if self._no_effect_restarts >= 2:
+                sl = (self._log_by_service.get(self._suspected, "") or "").lower()
+                if any(
+                    x in sl
+                    for x in ("queue depth", "throttling", "latency spike", "dropping connections")
+                ):
+                    self._failure_mode_guess = "overloaded"
+                self._no_effect_restarts = 0
+
         if self._failure_mode_guess == "crashed" and "made things worse" in lr_prev:
             self._bad_restart_count += 1
             if self._bad_restart_count >= 2:
@@ -184,6 +209,7 @@ class HeuristicAgent:
                 self._bad_restart_count = 0
 
         fm = self._failure_mode_guess
+        self._issued_fix = True
         if fm == "bad_deploy":
             return {"type": "rollback_deploy", "target": self._suspected}
         if fm == "overloaded":
