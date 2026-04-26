@@ -21,14 +21,18 @@ class HeuristicAgent:
         self._last_check_target = None
 
     def _capture_previous_logs(self, obs: dict) -> None:
-        lr = obs.get("last_action_result", "")
-        if self._last_check_target and lr.startswith("LOGS"):
+        """Store LOG output for the service we last queried. Be lenient on prefix (Space/Gradio must not drop logs)."""
+        raw = obs.get("last_action_result")
+        lr = "" if raw is None else (raw if isinstance(raw, str) else str(raw))
+        head = lr.lstrip()[:24].upper()
+        looks_like_logs = "LOGS:" in lr or head.startswith("LOGS")
+        if self._last_check_target and looks_like_logs:
             self._log_by_service[self._last_check_target] = lr
         self._last_check_target = None
 
     @staticmethod
     def _candidate_services(obs: dict) -> list[str]:
-        """Alerts + CPU order first, then append any unchecked service so all 5 can be log-scanned (never truncate at 4 — the 5th can be the root)."""
+        """Alerts + CPU order first, then any remaining service (all 5 may be log-scanned)."""
         metrics = obs["metrics"]
         by_cpu = sorted(SERVICES, key=lambda s: metrics[s]["cpu"], reverse=True)
         alert_svcs: list[str] = []
@@ -51,7 +55,6 @@ class HeuristicAgent:
 
     @staticmethod
     def _score_incident_keywords(text: str) -> int:
-        """Higher = more likely this service is the real root (template lines vs generic noise)."""
         if not text:
             return 0
         t = text.lower()
@@ -79,24 +82,34 @@ class HeuristicAgent:
         return score
 
     @staticmethod
-    def _infer_failure_mode(combined_logs: str) -> str:
-        t = combined_logs.lower()
-        if any(
-            x in t
-            for x in (
-                "rollback available",
-                "config parse",
-                "startup probe failing",
-                "deploy",
-                "v2.4.1",
-                "v2.3.9",
+    def _text_suggests_mode(t: str, mode: str) -> bool:
+        t = (t or "").lower()
+        if mode == "bad_deploy":
+            return any(
+                x in t
+                for x in (
+                    "rollback available",
+                    "config parse",
+                    "startup probe failing",
+                    "deploy",
+                    "v2.4.1",
+                    "v2.3.9",
+                )
             )
-        ):
-            return "bad_deploy"
-        if any(x in t for x in ("queue depth", "throttling", "latency spike", "dropping connections")):
-            return "overloaded"
-        if any(x in t for x in ("heap usage", "gc pressure", "memory usage at")):
-            return "memory_leak"
+        if mode == "overloaded":
+            return any(x in t for x in ("queue depth", "throttling", "latency spike", "dropping connections"))
+        if mode == "memory_leak":
+            return any(x in t for x in ("heap usage", "gc pressure", "memory usage at"))
+        return any(x in t for x in ("exited unexpectedly", "oom kill", "segfault"))
+
+    @classmethod
+    def _infer_best_failure_mode(cls, log_by_service: dict[str, str]) -> str:
+        """Scan every stored LOG block + aggregate; first match by severity wins (avoids losing api-gateway hints)."""
+        chunks = list(log_by_service.values()) + ["\n".join(log_by_service.values())]
+        for mode in ("bad_deploy", "overloaded", "memory_leak", "crashed"):
+            for ch in chunks:
+                if cls._text_suggests_mode(ch, mode):
+                    return mode
         return "crashed"
 
     def _pick_suspect(self, candidates: list[str]) -> str:
@@ -125,9 +138,14 @@ class HeuristicAgent:
                     self._last_check_target = svc
                     return {"type": "check_logs", "target": svc}
 
-            combined = "\n".join(self._log_by_service.values())
             self._suspected = self._pick_suspect(candidates)
-            self._failure_mode_guess = self._infer_failure_mode(combined)
+            self._failure_mode_guess = self._infer_best_failure_mode(self._log_by_service)
+            # If we picked a suspect with a strong local log, prefer mode implied by that log
+            svc_log = self._log_by_service.get(self._suspected or "", "")
+            for mode in ("bad_deploy", "overloaded", "memory_leak", "crashed"):
+                if self._text_suggests_mode(svc_log, mode):
+                    self._failure_mode_guess = mode
+                    break
             self._diagnosed = True
             return {
                 "type": "diagnose",
